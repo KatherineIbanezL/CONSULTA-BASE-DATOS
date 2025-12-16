@@ -1,0 +1,242 @@
+-- CASO 1 (ADMIN)
+
+-- USUARIO 1---
+CREATE USER PRY2205_USER1 IDENTIFIED BY "UsuarioBD.2025!"
+DEFAULT TABLESPACE DATA
+TEMPORARY TABLESPACE TEMP;
+
+-- QUOTAS
+ALTER USER PRY2205_USER1 QUOTA UNLIMITED ON DATA;
+
+-- ROLES 
+GRANT CREATE SESSION TO PRY2205_USER1; 
+GRANT RESOURCE TO PRY2205_USER1;
+
+-- ROL USUARIO 1 (dueño)
+CREATE ROLE PRY2205_ROL_D;
+
+-- Privilegios usuario 1
+GRANT CREATE TABLE TO PRY2205_ROL_D;
+GRANT CREATE VIEW TO PRY2205_ROL_D;
+GRANT CREATE SYNONYM TO PRY2205_ROL_D;
+GRANT CREATE PUBLIC SYNONYM TO PRY2205_ROL_D;
+
+-- Rol aisgnado a usuario 1
+GRANT PRY2205_ROL_D TO PRY2205_USER1;
+
+-- USUARIO 2 ----
+CREATE USER PRY2205_USER2 IDENTIFIED BY "UsuarioBD2.2025!"
+DEFAULT TABLESPACE DATA
+TEMPORARY TABLESPACE TEMP;
+
+-- QUOTES
+ALTER USER PRY2205_USER2 QUOTA UNLIMITED ON DATA;
+
+-- ROLES
+GRANT CONNECT TO PRY2205_USER2;
+
+-- ROL USUARIO 2 (desarrollador)
+CREATE ROLE PRY2205_ROL_P;
+
+-- Privilegios usuario 2
+GRANT CREATE TABLE TO PRY2205_ROL_P;
+GRANT CREATE SEQUENCE TO PRY2205_ROL_P;
+GRANT CREATE TRIGGER TO PRY2205_ROL_P;
+
+-- Rol asignado a usuario 2
+GRANT PRY2205_ROL_P TO PRY2205_USER2;
+
+----------------------------------------
+-- CASO 2-------------------------------
+
+-- CASO 2: USUARIO 1 -------------------
+
+-- Creación de sinónimos
+CREATE PUBLIC SYNONYM syn_libros       FOR PRY2205_USER1.LIBRO;
+CREATE PUBLIC SYNONYM syn_ejemplares   FOR PRY2205_USER1.EJEMPLAR;
+CREATE PUBLIC SYNONYM syn_prestamos    FOR PRY2205_USER1.PRESTAMO;
+CREATE PUBLIC SYNONYM syn_empleados    FOR PRY2205_USER1.EMPLEADO;
+
+-- Dar acceso
+GRANT SELECT ON PRY2205_USER1.LIBRO    TO PRY2205_ROL_P;
+GRANT SELECT ON PRY2205_USER1.EJEMPLAR TO PRY2205_ROL_P;
+GRANT SELECT ON PRY2205_USER1.PRESTAMO TO PRY2205_ROL_P;
+GRANT SELECT ON PRY2205_USER1.EMPLEADO TO PRY2205_ROL_P;
+
+---------------------------------------
+
+-- CASO 2: USUARIO 2 ------------------
+DROP TABLE CONTROL_STOCK_LIBROS CASCADE CONSTRAINTS;
+DROP SEQUENCE SEQ_CONTROL_STOCK;
+
+-- Creación de secuencia
+CREATE SEQUENCE SEQ_CONTROL_STOCK
+START WITH 1
+INCREMENT BY 1
+NOCACHE
+NOCYCLE;
+
+-- Crear tabla para guardar los resultados
+CREATE TABLE CONTROL_STOCK_LIBROS (
+    id_control           NUMBER(6) PRIMARY KEY,
+    libroid              NUMBER(5) NOT NULL,
+    nombre_libro         VARCHAR2(70) NOT NULL,
+    total_ejemplares     NUMBER NOT NULL,
+    en_prestamo          NUMBER NOT NULL,
+    disponibles          NUMBER NOT NULL,
+    porcentaje_prestamo  NUMBER(5, 2) NOT NULL,
+    stock_critico        CHAR(1) NOT NULL
+);
+
+-- Sentencia de Inserción final
+INSERT INTO CONTROL_STOCK_LIBROS (
+    ID_CONTROL,
+    LIBROID,
+    NOMBRE_LIBRO,
+    TOTAL_EJEMPLARES,
+    EN_PRESTAMO,
+    DISPONIBLES,
+    PORCENTAJE_PRESTAMO,
+    STOCK_CRITICO
+)
+SELECT
+    SEQ_CONTROL_STOCK.NEXTVAL AS ID_CONTROL,
+    
+    -- Columna LIBRO_ID
+    L.libroid,
+    
+    -- Columna NOMBRE_LIBRO
+    L.nombre_libro,
+    
+    -- TOTAL_EJEMPLARES
+    NVL(EJ.total_ejemplares, 0) AS TOTAL_EJEMPLARES,
+    
+    -- Columna EN_PRESTAMO (Ejemplares prestados en el período)
+    NVL(PRESTAMOS_PERIODO.ejemplares_prestados_periodo, 0) AS EN_PRESTAMO,
+    
+    -- Columna DISPONIBLES
+    (NVL(EJ.total_ejemplares, 0) - NVL(PRESTAMOS_PERIODO.ejemplares_prestados_periodo, 0)) AS DISPONIBLES,
+    
+    -- Columna PORCENTAJE_PRESTAMO
+    ROUND(
+        (NVL(PRESTAMOS_PERIODO.ejemplares_prestados_periodo, 0) / NULLIF(NVL(EJ.total_ejemplares, 0), 0)) * 100
+    , 2) AS PORCENTAJE_PRESTAMO,
+    
+    -- Columna STOCK_CRITICO
+    CASE
+        WHEN (NVL(EJ.total_ejemplares, 0) - NVL(PRESTAMOS_PERIODO.ejemplares_prestados_periodo, 0)) > 2 THEN 'S'
+        ELSE 'N'
+    END AS STOCK_CRITICO
+    
+FROM
+    syn_libros L
+    
+LEFT JOIN (
+    SELECT libroid, COUNT(*) AS total_ejemplares
+    FROM syn_ejemplares
+    GROUP BY libroid
+) EJ ON L.libroid = EJ.libroid
+
+LEFT JOIN (
+    SELECT
+        P.libroid,
+        COUNT(DISTINCT P.ejemplarid)
+    FROM
+        syn_prestamos P
+    WHERE
+        P.empleadoid IN (190, 180, 150)
+        -- Filtra por el año completo que inició 24 meses antes
+        AND P.fecha_inicio >= TRUNC(ADD_MONTHS(SYSDATE, -24), 'YYYY')
+        AND P.fecha_inicio < TRUNC(SYSDATE, 'YYYY')
+    GROUP BY P.libroid
+) PRESTAMOS_PERIODO ON L.libroid = PRESTAMOS_PERIODO.libroid;
+
+COMMIT;
+
+SELECT *
+FROM CONTROL_STOCK_LIBROS
+ORDER BY libroid;
+
+----------------------------------------
+-- CASO 3 ------------------------------
+
+-- CASO 3.1 USUARIO 1 --------------------
+
+-- Creación de sinónimos
+CREATE PUBLIC SYNONYM syn_alumnos FOR PRY2205_USER1.ALUMNO;
+CREATE PUBLIC SYNONYM syn_carreras FOR PRY2205_USER1.CARRERA;
+
+-- Dar acceso
+GRANT SELECT ON syn_prestamos TO PRY2205_ROL_D;
+GRANT SELECT ON syn_alumnos TO PRY2205_ROL_D;
+GRANT SELECT ON syn_carreras TO PRY2205_ROL_D;
+GRANT SELECT ON syn_libros TO PRY2205_ROL_D;
+
+-- Creacion de Vista
+CREATE OR REPLACE VIEW VW_DETALLE_MULTAS AS
+SELECT
+    -- Identificadores y Nombres
+    P.PRESTAMOID AS ID_PRESTAMO,
+    L.LIBROID AS ID_LIBRO,
+    A.NOMBRE || ' ' || A.APATERNO || ' ' || A.AMATERNO AS ALUMNO,
+    CR.DESCRIPCION AS CARRERA,
+    
+    -- Precio del libro con formato
+    TO_CHAR(L.PRECIO, '$99G999G999') AS PRECIO_LIBRO,
+    
+    -- Fechas con formato DD-MM-YYYY
+    TO_CHAR(P.FECHA_ENTREGA, 'DD-MM-YYYY') AS FECHA_ENTREGA,
+    TO_CHAR(P.FECHA_TERMINO, 'DD-MM-YYYY') AS FECHA_TERMINO,
+
+    -- Días de Atraso
+    (P.FECHA_ENTREGA - P.FECHA_TERMINO) AS DIAS_ATRASO,
+    -- MULTA CALCULADA
+    TO_CHAR(
+        ROUND((P.FECHA_ENTREGA - P.FECHA_TERMINO) * (L.PRECIO * 0.03), 2), 
+        '$99G999G999'
+    ) AS VALOR_MULTA,
+    
+    -- Definición de la fórmula del porcentaje de rebaja
+    NVL(RM.PORC_REBAJA_MULTA / 100, 0) AS PORCENTAJE_REBAJA_MULTA,
+
+    -- VALOR_REBAJA
+      TO_CHAR(
+        ROUND(
+            (ROUND((P.FECHA_ENTREGA - P.FECHA_TERMINO) * (L.PRECIO * 0.03), 2)) -- (Fórmula de Multa Base)
+            * (1 - (NVL(RM.PORC_REBAJA_MULTA / 100, 0))), -- (1 - Fórmula de Porcentaje de Rebaja)
+            2
+        ),
+        '$99G999G999'
+    ) AS VALOR_REBAJADO
+    
+FROM
+    PRY2205_USER1.PRESTAMO P
+INNER JOIN PRY2205_USER1.ALUMNO A ON P.ALUMNOID = A.ALUMNOID
+INNER JOIN PRY2205_USER1.CARRERA CR ON A.CARRERAID = CR.CARRERAID
+INNER JOIN PRY2205_USER1.LIBRO L ON P.LIBROID = L.LIBROID
+LEFT JOIN PRY2205_USER1.REBAJA_MULTA RM ON CR.CARRERAID = RM.CARRERAID
+    
+WHERE
+    P.FECHA_ENTREGA IS NOT NULL
+    AND P.FECHA_ENTREGA > P.FECHA_TERMINO
+    AND P.FECHA_TERMINO >= TRUNC(ADD_MONTHS(SYSDATE, -24), 'YYYY')
+    AND P.FECHA_TERMINO < TRUNC(ADD_MONTHS(SYSDATE, -12), 'YYYY')
+    
+ORDER BY P.FECHA_ENTREGA DESC;
+
+SELECT *
+FROM VW_DETALLE_MULTAS;
+
+-- CASO 3.2 -----
+
+-- Índice en PRESTAMO para filtros por fecha y joins
+CREATE INDEX IDX_PRESTAMO_FECHAS
+ON PRESTAMO (FECHA_TERMINO, FECHA_ENTREGA);
+
+-- Índice para joins por ALUMNO y LIBRO
+CREATE INDEX IDX_PRESTAMO_FK
+ON PRESTAMO (ALUMNOID, LIBROID);
+
+-- Índice en ALUMNO para join con CARRERA
+CREATE INDEX IDX_ALUMNO_CARRERA
+ON ALUMNO (CARRERAID);
